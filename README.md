@@ -10,7 +10,7 @@ The model we'll fit estimates the count of honorifics for both of these conditio
 
 The two random effects (subject and item) will be crossed. That is, each participant saw each item. Experimental designs with crossed random effects structures are very common in experimental psychology and psycholinguistics, but the analysis pipeline can also be adapted to implement models with hierarchical random effects structures (e.g., pupil within class within school within district).
 
-The script implements this model first with lme4 and then shows how likelihood ratio tests can easily be performed with the afex package. The model is then implemented in a Bayesian fashion with brms.
+The script implements the mixed Poisson regression first with lme4 and then shows how likelihood ratio tests can easily be performed with the afex package. The model is then implemented in a Bayesian fashion with brms.
 
 The following packages are needed to run the script:
 
