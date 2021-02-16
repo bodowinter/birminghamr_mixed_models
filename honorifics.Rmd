@@ -1,0 +1,214 @@
+---
+title: "Mixed Poisson regression example (Korean dyad data)"
+author: "Bodo"
+date: "29/10/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Background: This data contains counts of honorific markers for dyadic interactions. Participants were recorded either speaking to a professor or to a friend. The prediction is that the count of honorifics will be higher when speaking to the professor.
+
+We will use Poisson regression to model this, but we have to account for the fact that we have multiple responses from the same participant, namely, one in five 'tasks'. This requires fitting a random effect of participant.
+
+We will treat 'task' here as a random effect. A case could be made for this being a fixed effect, because 'task' is repeatable (we could devise a new experiment with the same task) and presumably has a systematic influence on the data. However, there are several reasons for us to treat 'task' as random effect here. Specifically, we think of it as a subset of the many different communicative scenarios that suffixes could be used in (we could've included many more tasks), and we don't know in advance which tasks will have higher rates of suffixes or not. So, essentially, we are thinking of this as a sample of communicative scenarios.
+
+The script will proceed to first setup the data, then implement a mixed model analysis with lme4, then show how to perform a likelihood ratio test with afex, finally re-run the analysis in a Bayesian way with brms.
+
+## Prelims
+
+Load packages:
+
+```{r, warning = FALSE, message = FALSE}
+library(tidyverse)
+library(lme4) # for mixed models
+library(afex) # for likelihood ratio tests (wrapper for lme4)
+library(brms) # for Bayesian mixed models
+```
+
+R and package versions for reporting and reproducibility:
+
+```{r}
+R.Version()
+packageVersion('tidyverse')
+packageVersion('lme4')
+packageVersion('afex')
+packageVersion('brms')
+```
+
+Load the *honorifics.csv* dataset:
+
+```{r, warning = FALSE, message = FALSE}
+hon <- read_csv('honorifics.csv')
+```
+
+Show the data:
+
+```{r}
+hon
+```
+
+**Important side note**: This simplified analysis ignores durations. Obviously, for any count variable, it matters how long you are counting for. This can be modeled with an *'offset()'* term.
+
+## Data processing
+
+This data is wide format, which is non-tidy because the 'count' variable is spread across different columns. For tidy data, we want each variable to be one column. So we need to make this data into long format. *pivot_longer()* comes in handy here:
+
+```{r}
+hon <- pivot_longer(hon,
+                    cols = Movie:Map2, # columns to make long
+                    names_to = 'Task', # name of new task identifier column
+                    values_to = 'Count') # name of new response column
+
+# Check:
+
+hon
+```
+
+## Mixed model analysis
+
+Let's create a Poisson model with this data:
+
+```{r}
+hon_mdl <- glmer(Count ~ Condition + # fixed effects
+                   (1 + Condition|ID) + (1 + Condition|Task), # random effects
+                 data = hon,
+                 family = poisson)
+```
+
+Notice that we have random slopes for Condition within subjects and Condition within items. This embodies our assumption that different people may respond differently to the politeness manipulation (e.g., some use more honorifics with the professor than others). Fitting a random intercept only model amounts to assuming that all participants behave the same with respect to the politeness condition ... which is quite an unreasonable assumption to make in this regard. The same logic carries over to the task item effect.
+
+Check the model:
+
+```{r}
+summary(hon_mdl)
+```
+
+Let's calculate the predicted rate of case ellipsis for the friend condition (= intercept) and for the professor condition (= intercept + professor difference). For this we use the *fixef()* function:
+
+```{r}
+exp(fixef(hon_mdl)[1]) # friend
+exp(fixef(hon_mdl)[1] + fixef(hon_mdl)[2]) # professor
+```
+
+The model predicts on average about 10 instances of case ellipsis for the friend condition and about 3 for the professor condition.
+
+Let's explore the random effects structure of the model:
+
+```{r}
+coef(hon_mdl)
+```
+
+The first bit *$ID* tells you each individual's intercept and slope. The slopes are really interesting to look at. If you happen to have additional information about the participants, for example, it may be interesting to look at the lowest and largest values (participants who made less or more of a difference with respect to the professor condition).
+
+It's also worth noting that all individual slopes are negative, which means that the model estimates that indeed ALL participants had less instances of case ellipsis for the professor.
+
+Let's use afex to perform a likelihood ratio test. This is what I would report as the test in the model (if I was living in an NHST/frequentist world... for the actual publication everything is Bayesian):
+
+```{r}
+hon_afex <- mixed(Count ~ Condition +
+                    (1 + Condition|ID) + (1 + Condition|Task),
+                  data = hon,
+                  family = poisson,
+                  method = 'LRT')
+```
+
+Check the results:
+
+```{r}
+hon_afex
+```
+
+Cool stuff. Remember however that this analysis so far does NOT control for overall duration, for which you would have to include an offset term.
+
+## Same thing Bayesian
+
+Settings forparallel processing (to instruct R to use all cores of my computer):
+
+```{r}
+options(mc.cores=parallel::detectCores())
+```
+
+Set weakly informative priors on slope coefficients... this important step obviously requires some thinking, but for now a normal distribution centered at zero with a standard deviation of 2 seems to be a decent choice, and it'll be more conservative than the corresponding frequentist model anyway.
+
+```{r}
+weak_priors <- c(prior('normal(0, 2)', class = 'b'))
+```
+
+(Important side note: In this particular example, none of the other priors are hand-specified. This means that for all other parameters, including random effects parameters, we use brms's default priors...)
+
+Control parameters for MCMC sampling:
+
+```{r}
+mcmc_controls <- list(adapt_delta = 0.999,
+                      max_treedepth = 13)
+```
+
+Fit the model. Instead of a Poisson regression, I use negative binomial regression here. For Poisson, the variance is fixed to the mean; negative binomial regression allows the variance to be different.
+
+```{r, warning = FALSE, message = FALSE}
+hon_brm <- brm(Count ~ Condition +
+                 (1 + Condition|ID) + (1 + Condition|Task),
+               family = 'negbinomial',
+               data = hon,
+               
+               # Priors:
+               
+               prior = weak_priors,
+               
+               # Settings for MCMC chain:
+               
+               control = mcmc_controls,
+               seed = 666, # set seed to a comforting number
+               init = 0, chains = 4,
+               iter = 6000, warmup = 4000)
+```
+
+Check the model:
+
+```{r}
+summary(hon_brm)
+```
+
+Extract posterior samples:
+
+```{r}
+posts <- posterior_samples(hon_brm)
+```
+
+Plot the posterior distribution of the main condition effect:
+
+```{r, fig.width = 8, fig.height = 6}
+posts %>% ggplot(aes(x = b_Conditionprofessor)) +
+  geom_density(fill = 'steelblue', alpha = 0.5, col = 'black') +
+  
+  # add line at zero:
+  
+  geom_vline(xintercept = 0, lty = 2) +
+  theme_minimal()
+```
+
+One thing we could report is the posterior probability of the main condition effect being non-zero:
+
+```{r}
+# N of posterior samples above zero:
+
+sum(posts$b_Condition > 0)
+
+# Proportion of posterior samples above zero:
+
+sum(posts$b_Condition > 0) / nrow(posts)
+
+# Estimated posterior probability of the effect being below zero:
+
+1 - sum(posts$b_Condition > 0) / nrow(posts)
+```
+
+This completes this analysis. Note again that there are a few things I deliberately simplified. In particular, model obviously needs an exposure variable (to account for the fact that counts will invariably be higher for longer trials), and the priors may need some extra thinking. In addition, more assessment of the model quality is needed (e.g., posterior predictive checks).
+
+
+
+
+
